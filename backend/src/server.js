@@ -7,6 +7,8 @@ import cookieParser from 'cookie-parser';
 import { connectDB } from './config/db.js';
 import authRoutes from './routes/auth.route.js';
 import messageRoutes from './routes/message.route.js';
+import { ensureCsrfCookie, validateCsrfToken } from './middleware/csrf.middleware.js';
+import { globalRateLimit } from './middleware/rate-limit.middleware.js';
 
 dotenv.config();
 
@@ -16,6 +18,7 @@ const __dirname = path.resolve();
 const PORT = process.env.PORT || 3000;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 
+app.set('trust proxy', 1);
 app.use(
   cors({
     origin: CLIENT_URL,
@@ -25,6 +28,9 @@ app.use(
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(globalRateLimit);
+app.use(ensureCsrfCookie);
+app.use(validateCsrfToken);
 
 app.get('/api/health', (_, res) => {
   res.status(200).json({ status: 'ok' });

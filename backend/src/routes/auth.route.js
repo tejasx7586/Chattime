@@ -3,8 +3,16 @@ import bcrypt from 'bcryptjs';
 import User from '../models/user.model.js';
 import { protectRoute } from '../middleware/auth.middleware.js';
 import { setAuthCookie } from '../utils/token.js';
+import { authRateLimit } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
+router.use(authRateLimit);
+
+const serializeUser = (user) => ({
+  _id: user._id,
+  name: user.name,
+  email: user.email,
+});
 
 router.post('/signup', async (req, res, next) => {
   try {
@@ -36,13 +44,7 @@ router.post('/signup', async (req, res, next) => {
 
     setAuthCookie(res, user._id.toString());
 
-    return res.status(201).json({
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-      },
-    });
+    return res.status(201).json({ user: serializeUser(user) });
   } catch (error) {
     next(error);
   }
@@ -71,13 +73,7 @@ router.post('/login', async (req, res, next) => {
 
     setAuthCookie(res, user._id.toString());
 
-    return res.status(200).json({
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-      },
-    });
+    return res.status(200).json({ user: serializeUser(user) });
   } catch (error) {
     next(error);
   }
@@ -93,8 +89,12 @@ router.post('/logout', (_, res) => {
   return res.status(200).json({ message: 'Logged out successfully' });
 });
 
+router.get('/csrf', (req, res) => {
+  return res.status(200).json({ csrfToken: req.cookies?.csrfToken || null });
+});
+
 router.get('/me', protectRoute, (req, res) => {
-  return res.status(200).json({ user: req.user });
+  return res.status(200).json({ user: serializeUser(req.user) });
 });
 
 router.get('/users', protectRoute, async (req, res, next) => {

@@ -2,9 +2,11 @@ import express from 'express';
 import mongoose from 'mongoose';
 import { protectRoute } from '../middleware/auth.middleware.js';
 import Message from '../models/message.model.js';
+import { messageRateLimit } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
+router.use(messageRateLimit);
 router.use(protectRoute);
 
 router.post('/send', async (req, res, next) => {

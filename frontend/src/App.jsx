@@ -3,11 +3,20 @@ import './App.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
+const getCookieValue = (name) => {
+  const cookie = document.cookie
+    .split('; ')
+    .find((entry) => entry.startsWith(`${name}=`));
+  return cookie ? decodeURIComponent(cookie.split('=').slice(1).join('=')) : '';
+};
+
 const request = async (path, options = {}) => {
+  const csrfToken = getCookieValue('csrfToken');
   const response = await fetch(`${API_BASE_URL}${path}`, {
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
       ...(options.headers || {}),
     },
     ...options,
@@ -108,10 +117,24 @@ function App() {
     loadMessages(selectedUserId);
 
     const interval = setInterval(() => {
+      if (document.hidden) {
+        return;
+      }
       loadMessages(selectedUserId);
     }, 5000);
 
-    return () => clearInterval(interval);
+    const onVisible = () => {
+      if (!document.hidden) {
+        loadMessages(selectedUserId);
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [user, selectedUserId, loadMessages]);
 
   const handleChange = (event) => {
