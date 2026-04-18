@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const MESSAGE_POLL_INTERVAL_MS = 15_000;
+const TYPING_IDLE_TIMEOUT_MS = 1_200;
 
 const getCookieValue = (name) => {
   const cookie = document.cookie
@@ -148,6 +150,31 @@ function App() {
     []
   );
 
+  const markMessagesRead = useCallback(async ({ senderId, messageIds }) => {
+    try {
+      const data = await request('/api/messages/read', {
+        method: 'POST',
+        body: JSON.stringify({ senderId, messageIds }),
+      });
+
+      if (data.readAt && Array.isArray(data.messageIds) && data.messageIds.length > 0) {
+        setMessages((current) =>
+          current.map((message) =>
+            data.messageIds.includes(message._id)
+              ? {
+                  ...message,
+                  readAt: data.readAt,
+                  deliveredAt: message.deliveredAt || data.readAt,
+                }
+              : message
+          )
+        );
+      }
+    } catch {
+      // Ignore transient read receipt errors.
+    }
+  }, []);
+
   useEffect(() => {
     loadSession();
   }, [loadSession]);
@@ -224,7 +251,10 @@ function App() {
       }
 
       if (normalized.senderId === selectedUserId && normalized.receiverId === user._id) {
-        loadMessages(selectedUserId);
+        markMessagesRead({
+          senderId: normalized.senderId,
+          messageIds: [normalized._id],
+        });
       }
 
       setTypingByUser((current) => ({
@@ -272,7 +302,7 @@ function App() {
         streamRef.current = null;
       }
     };
-  }, [user, selectedUserId, loadMessages]);
+  }, [user, selectedUserId, markMessagesRead]);
 
   useEffect(() => {
     if (!user || !selectedUserId) {
@@ -286,7 +316,7 @@ function App() {
       if (!document.hidden) {
         loadMessages(selectedUserId);
       }
-    }, 15000);
+    }, MESSAGE_POLL_INTERVAL_MS);
 
     return () => {
       clearInterval(interval);
@@ -377,7 +407,7 @@ function App() {
       typingTimeoutRef.current = setTimeout(() => {
         setSelfTyping(false);
         sendTypingSignal(false, selectedUserId);
-      }, 1200);
+      }, TYPING_IDLE_TIMEOUT_MS);
     }
   };
 

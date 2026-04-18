@@ -13,7 +13,7 @@ router.get('/stream', (req, res) => {
   openRealtimeStream(req, res);
 });
 
-router.post('/typing', async (req, res) => {
+router.post('/typing', (req, res) => {
   const toUserId = req.body?.toUserId;
   const isTyping = Boolean(req.body?.isTyping);
 

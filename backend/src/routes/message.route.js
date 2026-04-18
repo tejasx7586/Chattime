@@ -10,6 +10,51 @@ const router = express.Router();
 router.use(messageRateLimit);
 router.use(protectRoute);
 
+const markMessagesAsRead = async (messages, readerId) => {
+  if (messages.length === 0) {
+    return null;
+  }
+
+  const readTimestamp = new Date();
+  const messageIds = messages.map((message) => message._id);
+
+  await Message.updateMany(
+    { _id: { $in: messageIds } },
+    [
+      {
+        $set: {
+          readAt: readTimestamp,
+          deliveredAt: { $ifNull: ['$deliveredAt', readTimestamp] },
+        },
+      },
+    ]
+  );
+
+  messages.forEach((message) => {
+    message.readAt = readTimestamp;
+    message.deliveredAt = message.deliveredAt || readTimestamp;
+  });
+
+  const messageIdsBySender = messages.reduce((accumulator, message) => {
+    const senderId = message.senderId.toString();
+    if (!accumulator[senderId]) {
+      accumulator[senderId] = [];
+    }
+    accumulator[senderId].push(message._id.toString());
+    return accumulator;
+  }, {});
+
+  Object.entries(messageIdsBySender).forEach(([senderId, senderMessageIds]) => {
+    emitToUser(senderId, 'message:read', {
+      messageIds: senderMessageIds,
+      readAt: readTimestamp.toISOString(),
+      readerId,
+    });
+  });
+
+  return { readTimestamp, messageIds: messageIds.map((id) => id.toString()) };
+};
+
 router.post('/send', async (req, res, next) => {
   try {
     const receiverId = req.body?.receiverId;
@@ -42,6 +87,46 @@ router.post('/send', async (req, res, next) => {
   }
 });
 
+router.post('/read', async (req, res, next) => {
+  try {
+    const senderId = req.body?.senderId;
+    const messageIds = Array.isArray(req.body?.messageIds) ? req.body.messageIds : [];
+
+    if (senderId && !mongoose.Types.ObjectId.isValid(senderId)) {
+      return res.status(400).json({ message: 'Valid senderId is required' });
+    }
+
+    const validMessageIds = messageIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+
+    if (!senderId && validMessageIds.length === 0) {
+      return res.status(400).json({ message: 'senderId or valid messageIds are required' });
+    }
+
+    const query = {
+      receiverId: req.user._id,
+      readAt: null,
+    };
+
+    if (senderId) {
+      query.senderId = senderId;
+    }
+
+    if (validMessageIds.length > 0) {
+      query._id = { $in: validMessageIds };
+    }
+
+    const unreadMessages = await Message.find(query);
+    const result = await markMessagesAsRead(unreadMessages, req.user._id.toString());
+
+    return res.status(200).json({
+      messageIds: result?.messageIds || [],
+      readAt: result?.readTimestamp?.toISOString() || null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/', async (req, res, next) => {
   try {
     const otherUserId = req.query?.userId;
@@ -61,31 +146,7 @@ router.get('/', async (req, res, next) => {
       (message) => message.receiverId.toString() === req.user._id.toString() && !message.readAt
     );
 
-    if (incomingUnreadMessages.length > 0) {
-      const readTimestamp = new Date();
-      const incomingUnreadIds = incomingUnreadMessages.map((message) => message._id);
-
-      await Message.updateMany(
-        { _id: { $in: incomingUnreadIds } },
-        {
-          $set: {
-            readAt: readTimestamp,
-            deliveredAt: readTimestamp,
-          },
-        }
-      );
-
-      incomingUnreadMessages.forEach((message) => {
-        message.readAt = readTimestamp;
-        message.deliveredAt = message.deliveredAt || readTimestamp;
-      });
-
-      emitToUser(otherUserId, 'message:read', {
-        messageIds: incomingUnreadIds.map((id) => id.toString()),
-        readAt: readTimestamp.toISOString(),
-        readerId: req.user._id.toString(),
-      });
-    }
+    await markMessagesAsRead(incomingUnreadMessages, req.user._id.toString());
 
     return res.status(200).json({ messages });
   } catch (error) {

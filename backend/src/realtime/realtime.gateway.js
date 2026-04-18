@@ -1,4 +1,5 @@
 const clientsByUser = new Map();
+const HEARTBEAT_INTERVAL_MS = 25_000;
 
 const serializeData = (data) => JSON.stringify(data ?? {});
 
@@ -15,7 +16,8 @@ const getUserClientSet = (userId) => {
   return clientsByUser.get(userId);
 };
 
-export const isUserOnline = (userId) => clientsByUser.has(userId);
+export const isUserOnline = (userId) =>
+  clientsByUser.has(userId) && clientsByUser.get(userId).size > 0;
 
 export const emitToUser = (userId, event, data) => {
   const clients = clientsByUser.get(userId);
@@ -56,7 +58,7 @@ export const openRealtimeStream = (req, res) => {
 
   const heartbeat = setInterval(() => {
     sendEvent(res, 'heartbeat', { now: Date.now() });
-  }, 25000);
+  }, HEARTBEAT_INTERVAL_MS);
 
   req.on('close', () => {
     clearInterval(heartbeat);

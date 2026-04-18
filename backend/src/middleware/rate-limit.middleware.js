@@ -4,8 +4,7 @@ const getClientKey = (req) => {
   const forwardedFor = req.headers['x-forwarded-for'];
   const forwardedIp =
     typeof forwardedFor === 'string' ? forwardedFor.split(',')[0].trim() : undefined;
-
-  return req.ip || req.socket?.remoteAddress || forwardedIp || `${req.method}:${req.originalUrl}`;
+  return req.ip || req.socket?.remoteAddress || forwardedIp || 'unknown-client';
 };
 
 const makeLimiter = (windowMs, max) =>
