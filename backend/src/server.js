@@ -7,6 +7,7 @@ import cookieParser from 'cookie-parser';
 import { connectDB } from './config/db.js';
 import authRoutes from './routes/auth.route.js';
 import messageRoutes from './routes/message.route.js';
+import realtimeRoutes from './routes/realtime.route.js';
 import { ensureCsrfCookie, validateCsrfToken } from './middleware/csrf.middleware.js';
 import { globalRateLimit } from './middleware/rate-limit.middleware.js';
 
@@ -38,6 +39,7 @@ app.get('/api/health', (_, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/realtime', realtimeRoutes);
 
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../frontend/dist')));

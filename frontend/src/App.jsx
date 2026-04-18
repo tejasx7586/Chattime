@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -8,6 +8,35 @@ const getCookieValue = (name) => {
     .split('; ')
     .find((entry) => entry.startsWith(`${name}=`));
   return cookie ? decodeURIComponent(cookie.split('=').slice(1).join('=')) : '';
+};
+
+const formatTime = (value) => {
+  if (!value) {
+    return '';
+  }
+
+  return new Date(value).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const normalizeMessage = (raw) => ({
+  ...raw,
+  senderId: typeof raw.senderId === 'string' ? raw.senderId : raw.senderId?._id,
+  receiverId: typeof raw.receiverId === 'string' ? raw.receiverId : raw.receiverId?._id,
+});
+
+const upsertMessages = (currentMessages, incomingMessages) => {
+  const map = new Map(currentMessages.map((message) => [message._id, message]));
+
+  incomingMessages.forEach((message) => {
+    map.set(message._id, message);
+  });
+
+  return Array.from(map.values()).sort(
+    (left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+  );
 };
 
 const request = async (path, options = {}) => {
@@ -45,6 +74,11 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [messageText, setMessageText] = useState('');
   const [messageLoading, setMessageLoading] = useState(false);
+  const [typingByUser, setTypingByUser] = useState({});
+  const [selfTyping, setSelfTyping] = useState(false);
+
+  const streamRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
   const selectedUser = useMemo(
     () => users.find((item) => item._id === selectedUserId) || null,
@@ -66,9 +100,11 @@ function App() {
   const loadUsers = useCallback(async () => {
     try {
       const data = await request('/api/auth/users');
-      setUsers(data.users || []);
-      if (!selectedUserId && data.users?.length) {
-        setSelectedUserId(data.users[0]._id);
+      const userList = data.users || [];
+      setUsers(userList);
+
+      if (!selectedUserId && userList.length > 0) {
+        setSelectedUserId(userList[0]._id);
       }
     } catch (loadError) {
       setError(loadError.message);
@@ -84,7 +120,8 @@ function App() {
     setMessageLoading(true);
     try {
       const data = await request(`/api/messages?userId=${encodeURIComponent(targetUserId)}`);
-      setMessages(data.messages || []);
+      const normalized = (data.messages || []).map(normalizeMessage);
+      setMessages(normalized);
       setError('');
     } catch (loadError) {
       setError(loadError.message);
@@ -92,6 +129,24 @@ function App() {
       setMessageLoading(false);
     }
   }, []);
+
+  const sendTypingSignal = useCallback(
+    async (isTyping, targetUserId) => {
+      if (!targetUserId) {
+        return;
+      }
+
+      try {
+        await request('/api/realtime/typing', {
+          method: 'POST',
+          body: JSON.stringify({ toUserId: targetUserId, isTyping }),
+        });
+      } catch {
+        // Ignore transient typing errors.
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     loadSession();
@@ -102,11 +157,122 @@ function App() {
       setUsers([]);
       setSelectedUserId('');
       setMessages([]);
+      setTypingByUser({});
+      if (streamRef.current) {
+        streamRef.current.close();
+        streamRef.current = null;
+      }
       return;
     }
 
     loadUsers();
   }, [user, loadUsers]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    const stream = new EventSource(`${API_BASE_URL}/api/realtime/stream`, {
+      withCredentials: true,
+    });
+
+    const onPresence = (event) => {
+      const payload = JSON.parse(event.data || '{}');
+      const { userId, isOnline } = payload;
+
+      if (!userId) {
+        return;
+      }
+
+      setUsers((currentUsers) =>
+        currentUsers.map((listUser) =>
+          listUser._id === userId ? { ...listUser, isOnline: Boolean(isOnline) } : listUser
+        )
+      );
+    };
+
+    const onTyping = (event) => {
+      const payload = JSON.parse(event.data || '{}');
+      const { fromUserId, isTyping } = payload;
+
+      if (!fromUserId) {
+        return;
+      }
+
+      setTypingByUser((current) => ({
+        ...current,
+        [fromUserId]: Boolean(isTyping),
+      }));
+    };
+
+    const onIncomingMessage = (event) => {
+      const payload = JSON.parse(event.data || '{}');
+      if (!payload.message?._id) {
+        return;
+      }
+
+      const normalized = normalizeMessage(payload.message);
+
+      const inSelectedConversation =
+        selectedUserId &&
+        [normalized.senderId, normalized.receiverId].includes(selectedUserId) &&
+        [normalized.senderId, normalized.receiverId].includes(user._id);
+
+      if (inSelectedConversation) {
+        setMessages((current) => upsertMessages(current, [normalized]));
+      }
+
+      if (normalized.senderId === selectedUserId && normalized.receiverId === user._id) {
+        loadMessages(selectedUserId);
+      }
+
+      setTypingByUser((current) => ({
+        ...current,
+        [normalized.senderId]: false,
+      }));
+    };
+
+    const onReadReceipt = (event) => {
+      const payload = JSON.parse(event.data || '{}');
+      const messageIds = payload.messageIds || [];
+      const readAt = payload.readAt;
+
+      if (!Array.isArray(messageIds) || messageIds.length === 0 || !readAt) {
+        return;
+      }
+
+      setMessages((current) =>
+        current.map((message) =>
+          messageIds.includes(message._id)
+            ? {
+                ...message,
+                readAt,
+                deliveredAt: message.deliveredAt || readAt,
+              }
+            : message
+        )
+      );
+    };
+
+    stream.addEventListener('presence', onPresence);
+    stream.addEventListener('typing', onTyping);
+    stream.addEventListener('message:new', onIncomingMessage);
+    stream.addEventListener('message:read', onReadReceipt);
+
+    streamRef.current = stream;
+
+    return () => {
+      stream.removeEventListener('presence', onPresence);
+      stream.removeEventListener('typing', onTyping);
+      stream.removeEventListener('message:new', onIncomingMessage);
+      stream.removeEventListener('message:read', onReadReceipt);
+      stream.close();
+      if (streamRef.current === stream) {
+        streamRef.current = null;
+      }
+    };
+  }, [user, selectedUserId, loadMessages]);
 
   useEffect(() => {
     if (!user || !selectedUserId) {
@@ -117,25 +283,24 @@ function App() {
     loadMessages(selectedUserId);
 
     const interval = setInterval(() => {
-      if (document.hidden) {
-        return;
-      }
-      loadMessages(selectedUserId);
-    }, 5000);
-
-    const onVisible = () => {
       if (!document.hidden) {
         loadMessages(selectedUserId);
       }
-    };
-
-    document.addEventListener('visibilitychange', onVisible);
+    }, 15000);
 
     return () => {
       clearInterval(interval);
-      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [user, selectedUserId, loadMessages]);
+
+  useEffect(
+    () => () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    },
+    []
+  );
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -176,9 +341,43 @@ function App() {
     try {
       await request('/api/auth/logout', { method: 'POST' });
       setUser(null);
+      setSelfTyping(false);
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
       setError('');
     } catch (logoutError) {
       setError(logoutError.message);
+    }
+  };
+
+  const handleMessageChange = (event) => {
+    const value = event.target.value;
+    setMessageText(value);
+
+    if (!selectedUserId) {
+      return;
+    }
+
+    if (value.trim() && !selfTyping) {
+      setSelfTyping(true);
+      sendTypingSignal(true, selectedUserId);
+    }
+
+    if (!value.trim() && selfTyping) {
+      setSelfTyping(false);
+      sendTypingSignal(false, selectedUserId);
+    }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    if (value.trim()) {
+      typingTimeoutRef.current = setTimeout(() => {
+        setSelfTyping(false);
+        sendTypingSignal(false, selectedUserId);
+      }, 1200);
     }
   };
 
@@ -191,13 +390,22 @@ function App() {
 
     setSubmitting(true);
     try {
-      await request('/api/messages/send', {
+      const data = await request('/api/messages/send', {
         method: 'POST',
         body: JSON.stringify({ receiverId: selectedUserId, text: messageText.trim() }),
       });
 
+      if (data.message?._id) {
+        setMessages((current) => upsertMessages(current, [normalizeMessage(data.message)]));
+      }
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      setSelfTyping(false);
+      await sendTypingSignal(false, selectedUserId);
+
       setMessageText('');
-      await loadMessages(selectedUserId);
     } catch (sendError) {
       setError(sendError.message);
     } finally {
@@ -286,9 +494,13 @@ function App() {
                   <button
                     type="button"
                     className={item._id === selectedUserId ? 'active' : ''}
-                    onClick={() => setSelectedUserId(item._id)}
+                    onClick={() => {
+                      setSelectedUserId(item._id);
+                      setTypingByUser((current) => ({ ...current, [item._id]: false }));
+                    }}
                   >
-                    {item.name}
+                    <span>{item.name}</span>
+                    <span className={`presence-dot ${item.isOnline ? 'online' : ''}`} />
                   </button>
                 </li>
               ))}
@@ -298,6 +510,9 @@ function App() {
 
         <section className="chat-panel card">
           <h2>{selectedUser ? `Chat with ${selectedUser.name}` : 'Select a user'}</h2>
+          {selectedUser && (
+            <p className="muted chat-presence">{selectedUser.isOnline ? 'Online' : 'Offline'}</p>
+          )}
 
           <div className="messages">
             {messageLoading ? (
@@ -307,19 +522,24 @@ function App() {
             ) : (
               messages.map((msg) => {
                 const isOwn = msg.senderId === user._id;
+                const statusText = msg.readAt ? 'Read' : msg.deliveredAt ? 'Delivered' : 'Sent';
+
                 return (
                   <div key={msg._id} className={`message ${isOwn ? 'outgoing' : 'incoming'}`}>
                     <p>{msg.text}</p>
+                    <p className="meta">{isOwn ? `${statusText} • ${formatTime(msg.createdAt)}` : formatTime(msg.createdAt)}</p>
                   </div>
                 );
               })
             )}
           </div>
 
+          {selectedUserId && typingByUser[selectedUserId] && <p className="muted typing-indicator">{selectedUser?.name} is typing…</p>}
+
           <form className="message-form" onSubmit={handleSendMessage}>
             <input
               value={messageText}
-              onChange={(event) => setMessageText(event.target.value)}
+              onChange={handleMessageChange}
               placeholder="Type your message"
               maxLength={2000}
               disabled={!selectedUserId || submitting}

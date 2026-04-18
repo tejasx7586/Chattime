@@ -4,6 +4,7 @@ import User from '../models/user.model.js';
 import { protectRoute } from '../middleware/auth.middleware.js';
 import { setAuthCookie } from '../utils/token.js';
 import { authRateLimit } from '../middleware/rate-limit.middleware.js';
+import { isUserOnline } from '../realtime/realtime.gateway.js';
 
 const router = express.Router();
 router.use(authRateLimit);
@@ -99,8 +100,16 @@ router.get('/me', protectRoute, (req, res) => {
 
 router.get('/users', protectRoute, async (req, res, next) => {
   try {
-    const users = await User.find({ _id: { $ne: req.user._id } }).select('-password').sort({ name: 1 });
-    return res.status(200).json({ users });
+    const users = await User.find({ _id: { $ne: req.user._id } })
+      .select('-password')
+      .sort({ name: 1 })
+      .lean();
+
+    const hydratedUsers = users.map((user) => ({
+      ...user,
+      isOnline: isUserOnline(user._id.toString()),
+    }));
+    return res.status(200).json({ users: hydratedUsers });
   } catch (error) {
     next(error);
   }

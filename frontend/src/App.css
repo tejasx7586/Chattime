@@ -108,6 +108,25 @@ button:disabled {
   background: #f9fafb;
   color: #111827;
   border-color: #d1d5db;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.presence-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ca3af;
+}
+
+.presence-dot.online {
+  background: #16a34a;
+}
+
+.chat-presence {
+  margin-top: -6px;
+  margin-bottom: 10px;
 }
 
 .messages {
@@ -134,6 +153,12 @@ button:disabled {
   word-break: break-word;
 }
 
+.message .meta {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
 .message.incoming {
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -143,6 +168,11 @@ button:disabled {
   background: #111827;
   color: #fff;
   margin-left: auto;
+}
+
+.typing-indicator {
+  margin-top: 8px;
+  margin-bottom: 0;
 }
 
 .message-form {
